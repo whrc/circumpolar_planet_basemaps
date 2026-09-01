@@ -1,0 +1,102 @@
+---
+title: "Arctic Boreal Basemap Grids"
+author: "Heidi Rodenhizer"
+---
+
+# Load Packages
+
+```{r}
+library(sf)
+library(viridis)
+library(tidyverse)
+```
+
+# Load Data
+
+```{r}
+planet_grids = st_read("./data/circumpolar_basemap_grids_2025.geojson") |>
+  st_transform(crs = 3857)
+circum_south = st_read(
+  "../RTSmapping_v2/domain/circumpolar_south_domain.geojson"
+) |>
+  st_make_valid() |>
+  st_transform(st_crs(planet_grids))
+```
+
+# Filter Planet Grids to Circumpolar South Region
+
+```{r}
+cs_planet_grids = planet_grids |>
+  mutate(
+    year = name |>
+      str_match("[:digit:]{4}") |>
+      as.integer(),
+    grid_column = id |>
+      str_split_i("-", 1) |>
+      as.integer(),
+    grid_row = id |>
+      str_split_i("-", 2) |>
+      as.integer(),
+    basemap_name = paste0(
+      "global_quarterly_",
+      year,
+      "q3_mosaic"
+    ),
+    delivery_location = paste0(
+      "global_quarterly/",
+      year,
+      "/q3/",
+      grid_column,
+      "/",
+      grid_row,
+      "/"
+    )
+  ) |>
+  st_filter(
+    circum_south
+  ) |>
+  select(
+    year,
+    id,
+    grid_column,
+    grid_row,
+    basemap_name,
+    delivery_location,
+    link
+  ) |>
+  arrange(year, grid_column, grid_row)
+```
+
+```{r}
+ggplot() +
+  geom_sf(
+    data = cs_planet_grids,
+    aes(color = grid_column),
+    fill = "transparent"
+  ) +
+  scale_color_viridis() +
+  theme(legend.position = "none") +
+  coord_sf(crs = 3413)
+```
+
+```{r}
+cs_planet_grids |>
+  st_drop_geometry() |>
+  summarise(
+    count = n(),
+    .by = "grid_column"
+  ) |>
+  summarise(
+    min = min(count),
+    median = median(count),
+    max = max(count)
+  )
+```
+
+```{r}
+# st_write(
+#   cs_planet_grids,
+#   "./data/circumpolar_south_planet_basemap_grids_2025.geojson",
+#   append = FALSE
+# )
+```

@@ -1,0 +1,202 @@
+---
+title: Search Planet Basemap API
+jupyter: python3
+---
+
+This script searches the basemap API for basemap grids across the circumpolar region.
+
+## API and Package Set-Up
+
+```{python}
+import os
+import json
+import requests
+import urllib.request
+import re
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+import shapely as shp
+from pprint import pprint
+```
+
+```{python}
+# Get Planet API Key
+%load_ext dotenv
+%dotenv
+
+api_key = os.getenv('PL_BM_API_KEY')
+```
+
+## User Input
+
+```{python}
+basemap_year = "2025"
+```
+
+## Search for Basemap
+
+```{python}
+#setup Planet base URL
+API_URL = "https://api.planet.com/basemaps/v1/mosaics"
+
+#setup session
+session = requests.Session()
+
+#authenticate
+session.auth = (api_key, "")
+```
+
+```{python}
+# make get request to access mosaic from basemaps API
+res = session.get(API_URL)
+
+#response status code - should be 200 if there were no errors
+print(res.status_code)
+
+#print metadata for mosaic
+mosaic = res.json()
+# print(json.dumps(mosaic, indent=2))
+```
+
+```{python}
+#make get request to access mosaic from basemaps API
+res = session.get("https://api.planet.com/basemaps/v1/series")
+
+#response status code
+print(res.status_code)
+
+#print names of mosaic options
+series = res.json()
+names = [item['name'] for item in series['series']]
+pprint(names)
+
+# print names of global Q3 (July-Sept) mosaics
+mosaic_link = [
+    mosaic['_links']['mosaics'] for mosaic in series['series'] if mosaic['name'] == 'Global Quarterly'
+][0]
+pprint(mosaic_link)
+mosaics = session.get(mosaic_link).json()
+mosaic_names = [mosaic['name'] for mosaic in mosaics['mosaics'] if re.match('^.*q3.*$', mosaic['name'])]
+pprint(mosaic_names)
+years = [re.search('\d{4}', mosaic)[0] for mosaic in mosaic_names]
+years
+```
+
+```{python}
+mosaic_names = [item for item in mosaic_names if re.match('^.*' + basemap_year + '.*$', item)]
+mosaic_names
+```
+
+```{python}
+# set bounding box
+string_bbox = '-180,40,180,85'
+
+#search for mosaic quad using AOI
+search_parameters = {
+    'bbox': string_bbox,
+    'minimal': True
+}
+```
+
+```{python}
+#| scrolled: true
+item_name = []
+item_id = []
+link = []
+percent_covered = []
+geom = []
+for mosaic_name in mosaic_names:
+
+    #set params for search using name of mosaic
+    parameters = {
+        "name__is": mosaic_name
+    }
+
+    #make get request to access mosaic from basemaps API
+    res = session.get(API_URL, params = parameters)
+
+    #response status code
+    print(res.status_code)
+
+    #print metadata for mosaic
+    mosaic = res.json()
+    print(json.dumps(mosaic, indent=2))
+
+    #get id
+    mosaic_id = mosaic['mosaics'][0]['id']
+
+    #get bbox for entire mosaic
+    mosaic_bbox = mosaic['mosaics'][0]['bbox']
+
+    print(mosaic_id)
+    print(mosaic_bbox)
+
+    #accessing quads using metadata from mosaic
+    quads_url = "{}/{}/quads".format(API_URL, mosaic_id)
+
+    #send request
+    res = session.get(quads_url, params=search_parameters, stream=True)
+
+    quads = res.json()
+    pprint(quads)
+
+    item_name = item_name + [mosaic_name]*len(quads['items'])
+    item_id = item_id + [item['id'] for item in quads['items']]
+    link = link + [item['_links']['download'] for item in quads['items']]
+    percent_covered = percent_covered + [item['percent_covered'] for item in quads['items']]
+    geom = geom + [
+                shp.geometry.box(item['bbox'][0], item['bbox'][1], item['bbox'][2], item['bbox'][3]) 
+                for item 
+                in quads['items']
+            ]
+    # print(item_id)
+
+    try:
+        next_link = quads['_links']['_next']
+        # print(next_link)
+    except:
+        next_link = None
+
+    while next_link:
+        res = session.get(next_link, stream=True)
+        quads = res.json()
+
+        item_name = item_name + [mosaic_name]*len(quads['items'])
+        item_id = item_id + [item['id'] for item in quads['items']]
+        link = link + [item['_links']['download'] for item in quads['items']]
+        percent_covered = percent_covered + [item['percent_covered'] for item in quads['items']]
+        geom = geom + [
+            shp.geometry.box(item['bbox'][0], item['bbox'][1], item['bbox'][2], item['bbox'][3]) 
+            for item 
+            in quads['items']
+        ]
+
+        try:
+            next_link = quads['_links']['_next']
+            # print(next_link)
+        except:
+            next_link = None
+```
+
+```{python}
+#| tags: []
+circumpolar_grids = gpd.GeoDataFrame(
+    data = pd.DataFrame({
+        'name': item_name,
+        'id': item_id,
+        'link': link,
+        'percent_covered': percent_covered,
+    }),
+    geometry = gpd.GeoSeries(
+        data = geom,
+        crs = 'EPSG:4326'
+    )
+)
+
+# circumpolar_grids
+```
+
+```{python}
+circumpolar_grids.to_file('./data/circumpolar_basemap_grids_' + basemap_year + '.geojson')
+```
